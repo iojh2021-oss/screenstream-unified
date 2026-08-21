@@ -20,7 +20,11 @@ The app accepts `screenstream://connect?server=wss://...&room=ABC123` links so a
 
 ## Build
 
-Android Studio can import the project directly. CI uses JDK 17 and Gradle 8.10.2 and publishes the debug APK as a GitHub Actions artifact.
+Android Studio can import the project directly. CI uses JDK 17 and Gradle 8.9, installs Android SDK 35, and publishes debug and release APK artifacts.
+
+## CI verification
+
+This branch is used only to verify the current main branch build after the Compose compiler fixes. It contains no product behavior changes.
 
 ## Signaling compatibility
 
