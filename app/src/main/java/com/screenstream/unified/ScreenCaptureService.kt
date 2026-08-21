@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.IBinder
@@ -45,9 +46,23 @@ class ScreenCaptureService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, notification())
+        startAsForeground()
         if (peer == null && intent != null) startCapture(intent)
         return START_NOT_STICKY
+    }
+
+    private fun startAsForeground() {
+        val notification = notification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun startCapture(intent: Intent) {
@@ -58,27 +73,47 @@ class ScreenCaptureService : Service() {
             @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
         }
         val server = intent.getStringExtra(EXTRA_SERVER_URL).orEmpty()
-        val room = intent.getStringExtra(EXTRA_ROOM_CODE).orEmpty()
-        if (resultCode < 0 || data == null || server.isBlank() || room.isBlank()) { stopSelf(); return }
+        val room = intent.getStringExtra(EXTRA_ROOM_CODE).orEmpty().trim().uppercase()
+        if (resultCode < 0 || data == null || server.isBlank() || room.isBlank()) {
+            stopSelf()
+            return
+        }
 
-        PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(this).createInitializationOptions())
+        PeerConnectionFactory.initialize(
+            PeerConnectionFactory.InitializationOptions.builder(applicationContext)
+                .createInitializationOptions()
+        )
         eglBase = EglBase.create()
         factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase!!.eglBaseContext))
             .createPeerConnectionFactory()
-        val rtc = PeerConnection.RTCConfiguration(listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
-        )).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
-        peer = factory?.createPeerConnection(rtc, observer)
-        if (peer == null) { stopSelf(); return }
 
-        val projectionData = Intent(data)
-        capturer = ScreenCapturerAndroid(projectionData, object : MediaProjection.Callback() {
-            override fun onStop() { stopSelf() }
-        })
-        textureHelper = SurfaceTextureHelper.create("ScreenStreamCapture", eglBase!!.eglBaseContext)
-        videoSource = factory!!.createVideoSource(false)
+        val rtc = PeerConnection.RTCConfiguration(
+            listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+        ).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        }
+        peer = factory?.createPeerConnection(rtc, observer)
+        if (peer == null) {
+            stopSelf()
+            return
+        }
+
+        capturer = ScreenCapturerAndroid(
+            Intent(data),
+            object : MediaProjection.Callback() {
+                override fun onStop() {
+                    stopSelf()
+                }
+            }
+        )
+        textureHelper = SurfaceTextureHelper.create(
+            "ScreenStreamCapture",
+            eglBase!!.eglBaseContext
+        )
+        videoSource = factory!!.createVideoSource(true)
         capturer!!.initialize(textureHelper, this, videoSource!!.capturerObserver)
         capturer!!.startCapture(1280, 720, 30)
         videoTrack = factory!!.createVideoTrack("screen", videoSource)
@@ -87,13 +122,21 @@ class ScreenCaptureService : Service() {
 
         signaling = SignalingClient(server, room, "phone", signalingListener)
         signaling!!.connect()
+        update("Waiting for Viewer…")
     }
 
     private val signalingListener = object : SignalingClient.Listener {
-        override fun onJoined() { update("Waiting for Viewer…") }
-        override fun onPeerJoined() { update("Viewer connected") ; createOffer() }
-        override fun onPeerLeft() { remoteDescriptionSet = false; pendingCandidates.clear(); update("Viewer disconnected") }
-        override fun onError(message: String) { update(message) }
+        override fun onJoined() = update("Waiting for Viewer…")
+        override fun onPeerJoined() {
+            update("Viewer connected")
+            createOffer()
+        }
+        override fun onPeerLeft() {
+            remoteDescriptionSet = false
+            pendingCandidates.clear()
+            update("Viewer disconnected")
+        }
+        override fun onError(message: String) = update(message)
         override fun onMessage(message: JSONObject) {
             when (message.optString("type")) {
                 "answer" -> setAnswer(message)
@@ -107,9 +150,18 @@ class ScreenCaptureService : Service() {
             override fun onCreateSuccess(description: SessionDescription) {
                 peer?.setLocalDescription(object : SdpAdapter() {
                     override fun onSetSuccess() {
-                        signaling?.send(JSONObject().apply { put("type", "offer"); put("sdp", description.description) })
+                        signaling?.send(JSONObject().apply {
+                            put("type", "offer")
+                            put("sdp", description.description)
+                        })
+                    }
+                    override fun onSetFailure(error: String) {
+                        update("Local SDP failed: $error")
                     }
                 }, description)
+            }
+            override fun onCreateFailure(error: String) {
+                update("Offer failed: $error")
             }
         }, MediaConstraints())
     }
@@ -124,63 +176,110 @@ class ScreenCaptureService : Service() {
                 pendingCandidates.clear()
                 update("Streaming")
             }
-            override fun onSetFailure(error: String) { update("Remote SDP failed") }
+            override fun onSetFailure(error: String) {
+                update("Remote SDP failed: $error")
+            }
         }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
     }
 
     private fun addCandidate(message: JSONObject) {
-        val candidate = IceCandidate(message.optString("sdpMid"), message.optInt("sdpMLineIndex", 0), message.optString("candidate"))
-        if (remoteDescriptionSet) peer?.addIceCandidate(candidate) else pendingCandidates.addLast(candidate)
+        val sdpMid = message.optString("sdpMid", "0")
+        val sdp = message.optString("candidate")
+        if (sdp.isBlank()) return
+        val candidate = IceCandidate(
+            sdpMid,
+            message.optInt("sdpMLineIndex", 0),
+            sdp
+        )
+        if (remoteDescriptionSet) peer?.addIceCandidate(candidate)
+        else pendingCandidates.addLast(candidate)
     }
 
     private val observer = object : PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate) {
             signaling?.send(JSONObject().apply {
-                put("type", "ice-candidate"); put("sdpMid", candidate.sdpMid)
-                put("sdpMLineIndex", candidate.sdpMLineIndex); put("candidate", candidate.sdp)
+                put("type", "ice-candidate")
+                put("sdpMid", candidate.sdpMid)
+                put("sdpMLineIndex", candidate.sdpMLineIndex)
+                put("candidate", candidate.sdp)
             })
         }
-        override fun onConnectionChange(state: PeerConnection.PeerConnectionState) { if (state == PeerConnection.PeerConnectionState.FAILED) update("WebRTC connection failed") }
-        override fun onSignalingChange(state: PeerConnection.SignalingState) {}
-        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) { update("WebRTC: ${state.name.lowercase().replace('_', ' ')}") }
-        override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
-        override fun onAddStream(stream: org.webrtc.MediaStream) {}
-        override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
-        override fun onDataChannel(channel: org.webrtc.DataChannel) {}
-        override fun onRenegotiationNeeded() {}
-        override fun onAddTrack(receiver: org.webrtc.RtpReceiver, mediaStreams: Array<out org.webrtc.MediaStream>) {}
-        override fun onTrack(transceiver: org.webrtc.RtpTransceiver) {}
+
+        override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+            when (state) {
+                PeerConnection.PeerConnectionState.CONNECTED -> update("Streaming")
+                PeerConnection.PeerConnectionState.FAILED -> update("WebRTC connection failed")
+                PeerConnection.PeerConnectionState.DISCONNECTED -> update("WebRTC disconnected")
+                else -> Unit
+            }
+        }
+
+        override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+            update("WebRTC: ${state.name.lowercase().replace('_', ' ')}")
+        }
+        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
+        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+        override fun onAddStream(stream: org.webrtc.MediaStream) = Unit
+        override fun onRemoveStream(stream: org.webrtc.MediaStream) = Unit
+        override fun onDataChannel(channel: org.webrtc.DataChannel) = Unit
+        override fun onRenegotiationNeeded() = Unit
+        override fun onAddTrack(receiver: org.webrtc.RtpReceiver, mediaStreams: Array<out org.webrtc.MediaStream>) = Unit
+        override fun onTrack(transceiver: org.webrtc.RtpTransceiver) = Unit
     }
 
-    private fun update(text: String) { getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification(text)) }
+    private fun update(text: String) {
+        getSystemService(NotificationManager::class.java)?.notify(
+            NOTIFICATION_ID,
+            notification(text)
+        )
+    }
 
     private fun notification(text: String = "Screen sharing is active"): Notification {
-        if (Build.VERSION.SDK_INT >= 26) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("screenstream", "ScreenStream", NotificationManager.IMPORTANCE_LOW))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(
+                    "screenstream",
+                    "ScreenStream",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
         }
         return NotificationCompat.Builder(this, "screenstream")
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentTitle("ScreenStream")
             .setContentText(text)
             .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
     override fun onDestroy() {
-        try { capturer?.stopCapture() } catch (_: Exception) {}
-        capturer?.dispose(); textureHelper?.dispose(); videoSource?.dispose(); videoTrack?.dispose()
-        peer?.close(); peer?.dispose(); peer = null
-        factory?.dispose(); factory = null; eglBase?.release(); eglBase = null
-        signaling?.close(); signaling = null
+        try {
+            capturer?.stopCapture()
+        } catch (_: Exception) {
+        }
+        capturer?.dispose()
+        textureHelper?.dispose()
+        videoSource?.dispose()
+        videoTrack?.dispose()
+        peer?.close()
+        peer?.dispose()
+        peer = null
+        factory?.dispose()
+        factory = null
+        eglBase?.release()
+        eglBase = null
+        signaling?.close()
+        signaling = null
         super.onDestroy()
     }
 
     private open class SdpAdapter : SdpObserver {
-        override fun onCreateSuccess(description: SessionDescription) {}
-        override fun onSetSuccess() {}
-        override fun onCreateFailure(error: String) {}
-        override fun onSetFailure(error: String) {}
+        override fun onCreateSuccess(description: SessionDescription) = Unit
+        override fun onSetSuccess() = Unit
+        override fun onCreateFailure(error: String) = Unit
+        override fun onSetFailure(error: String) = Unit
     }
 }
