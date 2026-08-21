@@ -16,8 +16,9 @@ concurrency:
 
 jobs:
   build:
+    name: Build APKs
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,16 +33,29 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 35
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
 
-      - name: Set up Gradle
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: '8.9'
+          cache-read-only: false
 
-      - name: Check Gradle configuration
-        run: gradle --version
+      - name: Verify toolchain
+        run: |
+          java -version
+          gradle --version
+          sdkmanager --list_installed
+
+      - name: Clean
+        run: gradle --no-daemon clean --stacktrace
+
+      - name: Compile Kotlin
+        run: gradle --no-daemon :app:compileDebugKotlin --stacktrace --warning-mode all
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace --warning-mode all
@@ -49,16 +63,22 @@ jobs:
       - name: Build release APK
         run: gradle --no-daemon :app:assembleRelease --stacktrace --warning-mode all
 
+      - name: Verify APK outputs
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          test -s app/build/outputs/apk/release/app-release.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: screenstream-unified-debug
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: screenstream-unified-release
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
