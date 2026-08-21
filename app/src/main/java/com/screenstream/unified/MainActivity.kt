@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@androidx.compose.material3.ExperimentalMaterial3Api
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ScreenStreamApp(deepLinkConfig: RoomConfig?) {
     var tab by remember { mutableIntStateOf(if (deepLinkConfig != null) 1 else 0) }
