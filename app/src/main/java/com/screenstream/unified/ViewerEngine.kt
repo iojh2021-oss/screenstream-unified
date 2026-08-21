@@ -1,7 +1,6 @@
 package com.screenstream.unified
 
 import android.content.Context
-import android.view.ViewGroup
 import org.json.JSONObject
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -47,15 +46,18 @@ class ViewerEngine(
         closePeer()
         remoteDescriptionSet = false
         pendingCandidates.clear()
-        val rtcConfig = PeerConnection.RTCConfiguration(listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
-        )).apply {
+        val rtcConfig = PeerConnection.RTCConfiguration(
+            listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+        ).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
         peer = factory.createPeerConnection(rtcConfig, observer)
-        if (peer == null) { onState("Unable to create WebRTC peer") ; return }
-        signaling = SignalingClient(config.normalizedServer(), config.room, "viewer", signalingListener)
+        if (peer == null) {
+            onState("Unable to create WebRTC peer")
+            return
+        }
+        signaling = SignalingClient(config.normalizedServer(), config.normalizedRoom(), "viewer", signalingListener)
         onState("Connecting to signaling…")
         signaling?.connect()
     }
@@ -70,7 +72,11 @@ class ViewerEngine(
     private val signalingListener = object : SignalingClient.Listener {
         override fun onJoined() { onState("Waiting for Stream device…") }
         override fun onPeerJoined() { onState("Stream device connected") }
-        override fun onPeerLeft() { remoteDescriptionSet = false; pendingCandidates.clear(); onState("Stream device disconnected") }
+        override fun onPeerLeft() {
+            remoteDescriptionSet = false
+            pendingCandidates.clear()
+            onState("Stream device disconnected")
+        }
         override fun onError(message: String) { onState(message) }
         override fun onMessage(message: JSONObject) {
             when (message.optString("type")) {
@@ -110,10 +116,12 @@ class ViewerEngine(
     }
 
     private fun handleCandidate(message: JSONObject) {
+        val candidateSdp = message.optString("candidate")
+        if (candidateSdp.isBlank()) return
         val candidate = IceCandidate(
-            message.optString("sdpMid"),
+            message.optString("sdpMid", "0"),
             message.optInt("sdpMLineIndex", 0),
-            message.optString("candidate")
+            candidateSdp
         )
         if (remoteDescriptionSet) peer?.addIceCandidate(candidate) else pendingCandidates.addLast(candidate)
     }
@@ -127,6 +135,7 @@ class ViewerEngine(
                 put("candidate", candidate.sdp)
             })
         }
+
         override fun onTrack(transceiver: RtpTransceiver) {
             val track = transceiver.receiver.track()
             if (track is org.webrtc.VideoTrack) {
@@ -135,25 +144,41 @@ class ViewerEngine(
                 onState("Streaming")
             }
         }
+
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
             onState("WebRTC: ${state.name.lowercase().replace('_', ' ')}")
         }
+
         override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
-            if (state == PeerConnection.PeerConnectionState.CONNECTED) onState("Streaming")
-            if (state == PeerConnection.PeerConnectionState.FAILED) onState("WebRTC connection failed")
+            when (state) {
+                PeerConnection.PeerConnectionState.CONNECTED -> onState("Streaming")
+                PeerConnection.PeerConnectionState.FAILED -> onState("WebRTC connection failed")
+                PeerConnection.PeerConnectionState.DISCONNECTED -> onState("WebRTC disconnected")
+                else -> Unit
+            }
         }
-        override fun onSignalingChange(state: PeerConnection.SignalingState) {}
-        override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
-        override fun onAddStream(stream: org.webrtc.MediaStream) { stream.videoTracks.firstOrNull()?.addSink(renderer) }
-        override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
-        override fun onDataChannel(channel: org.webrtc.DataChannel) {}
-        override fun onRenegotiationNeeded() {}
-        override fun onAddTrack(receiver: org.webrtc.RtpReceiver, mediaStreams: Array<out org.webrtc.MediaStream>) {}
+
+        override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
+        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
+        override fun onAddStream(stream: org.webrtc.MediaStream) {
+            stream.videoTracks.firstOrNull()?.addSink(renderer)
+        }
+        override fun onRemoveStream(stream: org.webrtc.MediaStream) = Unit
+        override fun onDataChannel(channel: org.webrtc.DataChannel) = Unit
+        override fun onRenegotiationNeeded() = Unit
+        override fun onAddTrack(
+            receiver: org.webrtc.RtpReceiver,
+            mediaStreams: Array<org.webrtc.MediaStream>
+        ) = Unit
     }
 
-    private fun closePeer() { peer?.close(); peer?.dispose(); peer = null }
+    private fun closePeer() {
+        peer?.close()
+        peer?.dispose()
+        peer = null
+    }
 
     fun dispose() {
         stop()
@@ -163,9 +188,9 @@ class ViewerEngine(
     }
 
     private open class SdpObserverAdapter : SdpObserver {
-        override fun onCreateSuccess(description: SessionDescription) {}
-        override fun onSetSuccess() {}
-        override fun onCreateFailure(error: String) {}
-        override fun onSetFailure(error: String) {}
+        override fun onCreateSuccess(description: SessionDescription) = Unit
+        override fun onSetSuccess() = Unit
+        override fun onCreateFailure(error: String) = Unit
+        override fun onSetFailure(error: String) = Unit
     }
 }
