@@ -183,11 +183,10 @@ class ScreenCaptureService : Service() {
     }
 
     private fun addCandidate(message: JSONObject) {
-        val sdpMid = message.optString("sdpMid", "0")
         val sdp = message.optString("candidate")
         if (sdp.isBlank()) return
         val candidate = IceCandidate(
-            sdpMid,
+            message.optString("sdpMid", "0"),
             message.optInt("sdpMLineIndex", 0),
             sdp
         )
@@ -220,12 +219,15 @@ class ScreenCaptureService : Service() {
         }
         override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
         override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
         override fun onAddStream(stream: org.webrtc.MediaStream) = Unit
         override fun onRemoveStream(stream: org.webrtc.MediaStream) = Unit
         override fun onDataChannel(channel: org.webrtc.DataChannel) = Unit
         override fun onRenegotiationNeeded() = Unit
-        override fun onAddTrack(receiver: org.webrtc.RtpReceiver, mediaStreams: Array<out org.webrtc.MediaStream>) = Unit
+        override fun onAddTrack(
+            receiver: org.webrtc.RtpReceiver,
+            mediaStreams: Array<org.webrtc.MediaStream>
+        ) = Unit
         override fun onTrack(transceiver: org.webrtc.RtpTransceiver) = Unit
     }
 
