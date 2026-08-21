@@ -16,12 +16,17 @@ The app accepts `screenstream://connect?server=wss://...&room=ABC123` links so a
 - Internet signaling is expected to use `wss://`.
 - Screen capture requires Android's system MediaProjection consent.
 - No signaling credentials are embedded in the app.
+- Generated rooms use cryptographically secure randomness.
 - STUN is used initially. TURN is deliberately not required for the first deployment and can be added as a fallback later if restrictive NATs require it.
 
 ## Build
 
-Android Studio can import the project directly. CI uses JDK 17 and Gradle 8.10.2 and publishes the debug APK as a GitHub Actions artifact.
+Android Studio can import the project directly. CI uses JDK 17 and Gradle 8.10.2, installs Android SDK 35, and publishes debug and release APK artifacts.
 
 ## Signaling compatibility
 
 The app uses the existing ScreenStream signaling protocol: `join`, `peer-joined`, `offer`, `answer`, `ice-candidate`, and `peer-left`. The signaling server only relays JSON between one `phone` and one `viewer` in a room.
+
+## CI verification
+
+This branch exists only to verify the complete Android build after the WebRTC and MediaProjection fixes.
