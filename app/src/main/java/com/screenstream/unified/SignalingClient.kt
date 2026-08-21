@@ -28,8 +28,9 @@ class SignalingClient(
     private var socket: WebSocket? = null
 
     fun connect() {
-        if (!(serverUrl.startsWith("wss://") || serverUrl.startsWith("ws://"))) {
-            listener.onError("Server must use ws:// or wss://")
+        val localDev = serverUrl.startsWith("ws://localhost") || serverUrl.startsWith("ws://10.0.2.2") || serverUrl.startsWith("ws://127.0.0.1")
+        if (!serverUrl.startsWith("wss://") && !localDev) {
+            listener.onError("Secure signaling requires wss://")
             return
         }
         socket = client.newWebSocket(Request.Builder().url(serverUrl).build(), object : WebSocketListener() {
