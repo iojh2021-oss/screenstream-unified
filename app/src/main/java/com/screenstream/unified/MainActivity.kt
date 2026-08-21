@@ -9,6 +9,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -197,7 +197,7 @@ private fun ViewerTab(config: RoomConfig, status: String, onStatus: (String) -> 
         ) {
             Button(
                 onClick = { engine.start(); connected = true },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(0.5f)
             ) {
                 Icon(Icons.Default.PlayArrow, null)
                 Spacer(Modifier.size(6.dp))
@@ -205,7 +205,7 @@ private fun ViewerTab(config: RoomConfig, status: String, onStatus: (String) -> 
             }
             OutlinedButton(
                 onClick = { engine.stop(); connected = false },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(0.5f)
             ) {
                 Icon(Icons.Default.Stop, null)
                 Spacer(Modifier.size(6.dp))
@@ -285,7 +285,7 @@ private fun StreamTab(
                     projectionLauncher.launch(manager.createScreenCaptureIntent())
                 },
                 enabled = !sharing,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(0.5f)
             ) {
                 Icon(Icons.Default.ScreenShare, null)
                 Spacer(Modifier.size(6.dp))
@@ -298,7 +298,7 @@ private fun StreamTab(
                     onStatus("Stopped")
                 },
                 enabled = sharing,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(0.5f)
             ) {
                 Icon(Icons.Default.Stop, null)
                 Spacer(Modifier.size(6.dp))
@@ -330,7 +330,7 @@ private fun StreamTab(
                 }
             }
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(8.dp))
         Text(
             "Internet signaling requires WSS. TURN is intentionally not used in this first release.",
             style = MaterialTheme.typography.bodySmall
