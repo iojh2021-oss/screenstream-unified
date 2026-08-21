@@ -5,7 +5,7 @@ import java.security.SecureRandom
 
 /** Connection settings shared by Viewer and Stream modes. */
 data class RoomConfig(
-    val serverUrl: String = "wss://screenstream-signaling.onrender.com",
+    val serverUrl: String = DEFAULT_SERVER,
     val room: String = generateRoom()
 ) {
     fun normalizedServer(): String = serverUrl.trim().let { value ->
@@ -17,16 +17,27 @@ data class RoomConfig(
         }
     }
 
-    fun deepLink(): Uri = Uri.Builder().scheme("screenstream").authority("connect")
+    fun normalizedRoom(): String = room.trim().uppercase()
+
+    fun deepLink(): Uri = Uri.Builder()
+        .scheme("screenstream")
+        .authority("connect")
         .appendQueryParameter("server", normalizedServer())
-        .appendQueryParameter("room", room.trim().uppercase())
+        .appendQueryParameter("room", normalizedRoom())
         .build()
 
     companion object {
+        const val DEFAULT_SERVER = "wss://screenstream-signaling.onrender.com"
+        private const val ROOM_LENGTH = 10
+        private const val ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
         private fun generateRoom(): String {
-            val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
             val random = SecureRandom()
-            return buildString { repeat(6) { append(alphabet[random.nextInt(alphabet.length)]) } }
+            return buildString(ROOM_LENGTH) {
+                repeat(ROOM_LENGTH) {
+                    append(ALPHABET[random.nextInt(ALPHABET.length)])
+                }
+            }
         }
     }
 }
