@@ -36,11 +36,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,7 +57,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
-    private var incomingConfig = mutableStateOf(RoomConfig())
+    private val incomingConfig = mutableStateOf<RoomConfig?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,57 +73,101 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == "screenstream" && data.host == "connect") {
-            val server = data.getQueryParameter("server")
-            val room = data.getQueryParameter("room")
-            if (!server.isNullOrBlank() && !room.isNullOrBlank()) {
-                incomingConfig.value = RoomConfig(server, room.uppercase())
-            }
+        if (data.scheme != "screenstream" || data.host != "connect") return
+
+        val server = data.getQueryParameter("server")?.trim().orEmpty()
+        val room = data.getQueryParameter("room")?.trim()?.uppercase().orEmpty()
+        if (server.isNotBlank() && room.isNotBlank()) {
+            incomingConfig.value = RoomConfig(server, room)
         }
     }
 }
 
 @androidx.compose.material3.ExperimentalMaterial3Api
-@androidx.compose.runtime.Composable
-private fun ScreenStreamApp(initialConfig: RoomConfig) {
-    var tab by remember { mutableIntStateOf(0) }
-    var config by remember(initialConfig.serverUrl, initialConfig.room) { mutableStateOf(initialConfig) }
+@Composable
+private fun ScreenStreamApp(deepLinkConfig: RoomConfig?) {
+    var tab by remember { mutableIntStateOf(if (deepLinkConfig != null) 1 else 0) }
+    var config by remember(deepLinkConfig?.serverUrl, deepLinkConfig?.room) {
+        mutableStateOf(deepLinkConfig ?: RoomConfig())
+    }
     var status by remember { mutableStateOf("Ready") }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("screenstream", Context.MODE_PRIVATE) }
 
-    LaunchedEffect(Unit) {
-        val savedServer = prefs.getString("server", null)
-        val savedRoom = prefs.getString("room", null)
-        if (!savedServer.isNullOrBlank() && !savedRoom.isNullOrBlank()) config = RoomConfig(savedServer, savedRoom)
+    LaunchedEffect(deepLinkConfig?.serverUrl, deepLinkConfig?.room) {
+        if (deepLinkConfig != null) {
+            config = deepLinkConfig
+            prefs.edit()
+                .putString("server", deepLinkConfig.normalizedServer())
+                .putString("room", deepLinkConfig.room.trim().uppercase())
+                .apply()
+            status = "Setup imported"
+        } else {
+            val savedServer = prefs.getString("server", null)
+            val savedRoom = prefs.getString("room", null)
+            if (!savedServer.isNullOrBlank() && !savedRoom.isNullOrBlank()) {
+                config = RoomConfig(savedServer, savedRoom)
+            }
+        }
     }
 
-    MaterialTheme(colorScheme = MaterialTheme.colorScheme) {
+    MaterialTheme {
         Scaffold(
             topBar = { TopAppBar(title = { Text("ScreenStream Unified") }) }
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 TabRow(selectedTabIndex = tab) {
-                    Tab(tab == 0, onClick = { tab = 0 }, text = { Text("Viewer") }, icon = { Icon(Icons.Default.Visibility, null) })
-                    Tab(tab == 1, onClick = { tab = 1 }, text = { Text("Stream") }, icon = { Icon(Icons.Default.ScreenShare, null) })
+                    Tab(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        text = { Text("Viewer") },
+                        icon = { Icon(Icons.Default.Visibility, null) }
+                    )
+                    Tab(
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                        text = { Text("Stream") },
+                        icon = { Icon(Icons.Default.ScreenShare, null) }
+                    )
                 }
-                if (tab == 0) ViewerTab(config, status = status, onStatus = { status = it })
-                else StreamTab(config, onConfig = { config = it; prefs.edit().putString("server", it.serverUrl).putString("room", it.room).apply() }, status = status, onStatus = { status = it })
+                if (tab == 0) {
+                    ViewerTab(config, status = status, onStatus = { status = it })
+                } else {
+                    StreamTab(
+                        config = config,
+                        onConfig = {
+                            config = it
+                            prefs.edit()
+                                .putString("server", it.normalizedServer())
+                                .putString("room", it.room)
+                                .apply()
+                        },
+                        status = status,
+                        onStatus = { status = it }
+                    )
+                }
             }
         }
     }
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 private fun ViewerTab(config: RoomConfig, status: String, onStatus: (String) -> Unit) {
     val context = LocalContext.current
-    val engine = remember(config.serverUrl, config.room) { ViewerEngine(context, config, onStatus) }
+    val engine = remember(config.normalizedServer(), config.room) {
+        ViewerEngine(context, config, onStatus)
+    }
     var connected by remember { mutableStateOf(false) }
 
-    DisposableEffect(engine) { onDispose { engine.dispose() } }
+    DisposableEffect(engine) {
+        onDispose { engine.dispose() }
+    }
 
     Column(Modifier.fillMaxSize()) {
-        Card(Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(20.dp)) {
+        Card(
+            Modifier.fillMaxWidth().padding(16.dp),
+            shape = RoundedCornerShape(20.dp)
+        ) {
             Column(Modifier.padding(16.dp)) {
                 Text("Live Viewer", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(4.dp))
@@ -132,28 +176,60 @@ private fun ViewerTab(config: RoomConfig, status: String, onStatus: (String) -> 
                 Text(status, color = MaterialTheme.colorScheme.primary)
             }
         }
-        Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp).background(Color.Black, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
-            AndroidView(factory = { engine.view() }, modifier = Modifier.fillMaxSize())
-            if (status == "Ready" || status.contains("Waiting")) Text("No video yet", color = Color.White)
-        }
-        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = { engine.start(); connected = true }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.size(6.dp)); Text(if (connected) "Reconnect" else "Connect")
+        Box(
+            Modifier.fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 16.dp)
+                .background(Color.Black, RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            AndroidView(
+                factory = { engine.view() },
+                modifier = Modifier.fillMaxSize()
+            )
+            if (status == "Ready" || status.contains("Waiting")) {
+                Text("No video yet", color = Color.White)
             }
-            OutlinedButton(onClick = { engine.stop(); connected = false }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Stop, null); Spacer(Modifier.size(6.dp)); Text("Stop")
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = { engine.start(); connected = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.PlayArrow, null)
+                Spacer(Modifier.size(6.dp))
+                Text(if (connected) "Reconnect" else "Connect")
+            }
+            OutlinedButton(
+                onClick = { engine.stop(); connected = false },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Stop, null)
+                Spacer(Modifier.size(6.dp))
+                Text("Stop")
             }
         }
     }
 }
 
-@androidx.compose.runtime.Composable
-private fun StreamTab(config: RoomConfig, onConfig: (RoomConfig) -> Unit, status: String, onStatus: (String) -> Unit) {
+@Composable
+private fun StreamTab(
+    config: RoomConfig,
+    onConfig: (RoomConfig) -> Unit,
+    status: String,
+    onStatus: (String) -> Unit
+) {
     val context = LocalContext.current
     var server by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
     var room by remember(config.room) { mutableStateOf(config.room) }
     var sharing by remember { mutableStateOf(false) }
-    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+
+    val projectionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val finalConfig = RoomConfig(server.trim(), room.trim().uppercase())
             onConfig(finalConfig)
@@ -166,27 +242,67 @@ private fun StreamTab(config: RoomConfig, onConfig: (RoomConfig) -> Unit, status
             ContextCompat.startForegroundService(context, serviceIntent)
             sharing = true
             onStatus("Waiting for Viewer…")
-        } else onStatus("Screen sharing permission cancelled")
+        } else {
+            onStatus("Screen sharing permission cancelled")
+        }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
         Text("Stream", style = MaterialTheme.typography.headlineMedium)
-        Text("Turn this phone into the sender. Screen capture starts only after Android's system permission dialog.")
-        OutlinedTextField(server, { server = it }, label = { Text("Secure signaling server") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(room, { room = it.uppercase() }, label = { Text("Room code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = {
-                val finalConfig = RoomConfig(server.trim(), room.trim().uppercase().ifBlank { RoomConfig().room })
-                server = finalConfig.serverUrl; room = finalConfig.room; onConfig(finalConfig)
-                val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                projectionLauncher.launch(manager.createScreenCaptureIntent())
-            }, enabled = !sharing, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.ScreenShare, null); Spacer(Modifier.size(6.dp)); Text("Start sharing")
+        Text("Turn this phone into the sender. Android will ask for screen-capture permission before streaming.")
+        OutlinedTextField(
+            value = server,
+            onValueChange = { server = it },
+            label = { Text("Secure signaling server") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = room,
+            onValueChange = { room = it.uppercase() },
+            label = { Text("Room code") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = {
+                    val finalConfig = RoomConfig(
+                        server.trim(),
+                        room.trim().uppercase().ifBlank { RoomConfig().room }
+                    )
+                    server = finalConfig.normalizedServer()
+                    room = finalConfig.room
+                    onConfig(finalConfig)
+                    val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+                            as MediaProjectionManager
+                    projectionLauncher.launch(manager.createScreenCaptureIntent())
+                },
+                enabled = !sharing,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.ScreenShare, null)
+                Spacer(Modifier.size(6.dp))
+                Text("Start sharing")
             }
-            OutlinedButton(onClick = {
-                context.stopService(Intent(context, ScreenCaptureService::class.java)); sharing = false; onStatus("Stopped")
-            }, enabled = sharing, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Stop, null); Spacer(Modifier.size(6.dp)); Text("Stop")
+            OutlinedButton(
+                onClick = {
+                    context.stopService(Intent(context, ScreenCaptureService::class.java))
+                    sharing = false
+                    onStatus("Stopped")
+                },
+                enabled = sharing,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Stop, null)
+                Spacer(Modifier.size(6.dp))
+                Text("Stop")
             }
         }
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
@@ -198,15 +314,26 @@ private fun StreamTab(config: RoomConfig, onConfig: (RoomConfig) -> Unit, status
                 Text("Status: $status")
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(onClick = {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("ScreenStream setup", RoomConfig(server, room).deepLink().toString()))
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                            as ClipboardManager
+                    clipboard.setPrimaryClip(
+                        ClipData.newPlainText(
+                            "ScreenStream setup",
+                            RoomConfig(server, room).deepLink().toString()
+                        )
+                    )
                     onStatus("Setup link copied")
                 }) {
-                    Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.size(6.dp)); Text("Copy setup link")
+                    Icon(Icons.Default.ContentCopy, null)
+                    Spacer(Modifier.size(6.dp))
+                    Text("Copy setup link")
                 }
             }
         }
         Spacer(Modifier.weight(1f))
-        Text("For internet use, keep the signaling endpoint on WSS/HTTPS. TURN can be added later as a fallback for restrictive NATs.", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "Internet signaling requires WSS. TURN is intentionally not used in this first release.",
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
